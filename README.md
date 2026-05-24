@@ -2,6 +2,8 @@
 
 A lightweight World of Warcraft addon that builds a disenchant queue from your bags and processes exactly one queued item per hardware input (button press / wheel bind), which keeps usage within Blizzard's one-action-per-input rules.
 
+<img width="1024" height="1024" alt="Disenqueue" src="https://github.com/user-attachments/assets/dbcaf466-e64d-4364-9ad5-a6140991d7bc" />
+
 ## Install
 
 1. Copy this addon folder into `World of Warcraft/_retail_/Interface/AddOns/`.
