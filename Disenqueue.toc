@@ -1,9 +1,9 @@
-## Interface: 110005
+## Interface: 120005
 ## Title: Disenqueue
 ## Notes: Queue disenchantable bag items and process one per wheel/input action.
-## Author: JoeTomkinson contributors
+## Author: Joe Tomkinson (Grimmvöcare - Bronzebeard)
 ## Version: 1.0.0
 ## SavedVariables: DisenqueueDB
+## IconTexture: Interface\AddOns\Disenqueue\logos\logo
 
-Bindings.xml
 Disenqueue.lua

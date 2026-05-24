@@ -1,5 +1,2 @@
-<Bindings>
-    <Binding name="WDQ_PROCESS_NEXT" header="DISENQUEUE">
-        WDQ_ProcessNextFromBinding()
-    </Binding>
-</Bindings>
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+</Ui>
