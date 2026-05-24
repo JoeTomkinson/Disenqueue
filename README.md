@@ -11,7 +11,7 @@ A lightweight World of Warcraft addon that builds a disenchant queue from your b
 
 1. Open TSM if you use it: `/tsm destroy` (optional companion workflow).
 2. Build this addon's queue: `/wdq build`.
-3. Open **Key Bindings → AddOns → WoW Disenchant Queue**.
+3. Open **Key Bindings → AddOns → Disenqueue**.
 4. Bind **Destroy/Disenchant next queued item** to **Mouse Wheel Up** and **Mouse Wheel Down**.
 5. Scroll to process one queued item at a time.
 

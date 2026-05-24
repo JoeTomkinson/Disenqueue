@@ -1,9 +1,9 @@
 ## Interface: 110005
-## Title: WoW Disenchant Queue
+## Title: Disenqueue
 ## Notes: Queue disenchantable bag items and process one per wheel/input action.
 ## Author: JoeTomkinson contributors
 ## Version: 1.0.0
-## SavedVariables: WowDisenchantQueueDB
+## SavedVariables: DisenqueueDB
 
 Bindings.xml
-WowDisenchantQueue.lua
+Disenqueue.lua
