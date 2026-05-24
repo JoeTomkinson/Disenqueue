@@ -1,0 +1,5 @@
+<Bindings>
+    <Binding name="WDQ_PROCESS_NEXT" header="WOW_DISENCHANT_QUEUE">
+        WDQ_ProcessNextFromBinding()
+    </Binding>
+</Bindings>
