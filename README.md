@@ -1,4 +1,4 @@
-# wow-disenchant-queue
+# Disenqueue
 
 A lightweight World of Warcraft addon that builds a disenchant queue from your bags and processes exactly one queued item per hardware input (button press / wheel bind), which keeps usage within Blizzard's one-action-per-input rules.
 
