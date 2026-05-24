@@ -3,7 +3,7 @@ local DISENCHANT_SPELL_ID = 13262
 local DEFAULT_MIN_QUALITY = 2
 local DEFAULT_MAX_QUALITY = 4
 
-BINDING_HEADER_WOW_DISENCHANT_QUEUE = "WoW Disenchant Queue"
+BINDING_HEADER_DISENQUEUE = "Disenqueue"
 BINDING_NAME_WDQ_PROCESS_NEXT = "Destroy/Disenchant next queued item"
 
 local addon = CreateFrame("Frame", "WDQ_MainFrame")
@@ -60,25 +60,25 @@ local function parseItemID(itemLink)
 end
 
 local function normalizeDB()
-    if type(WowDisenchantQueueDB) ~= "table" then
-        WowDisenchantQueueDB = {}
+    if type(DisenqueueDB) ~= "table" then
+        DisenqueueDB = {}
     end
 
-    if type(WowDisenchantQueueDB.minQuality) ~= "number" then
-        WowDisenchantQueueDB.minQuality = DEFAULT_MIN_QUALITY
+    if type(DisenqueueDB.minQuality) ~= "number" then
+        DisenqueueDB.minQuality = DEFAULT_MIN_QUALITY
     end
 
-    if type(WowDisenchantQueueDB.maxQuality) ~= "number" then
-        WowDisenchantQueueDB.maxQuality = DEFAULT_MAX_QUALITY
+    if type(DisenqueueDB.maxQuality) ~= "number" then
+        DisenqueueDB.maxQuality = DEFAULT_MAX_QUALITY
     end
 
-    if type(WowDisenchantQueueDB.protectedItemIDs) ~= "table" then
-        WowDisenchantQueueDB.protectedItemIDs = {}
+    if type(DisenqueueDB.protectedItemIDs) ~= "table" then
+        DisenqueueDB.protectedItemIDs = {}
     end
 end
 
 local function isProtected(itemID)
-    return itemID and WowDisenchantQueueDB.protectedItemIDs[itemID]
+    return itemID and DisenqueueDB.protectedItemIDs[itemID]
 end
 
 local function isDisenchantCandidate(itemLink)
@@ -87,7 +87,7 @@ local function isDisenchantCandidate(itemLink)
         return false
     end
 
-    if itemQuality < WowDisenchantQueueDB.minQuality or itemQuality > WowDisenchantQueueDB.maxQuality then
+    if itemQuality < DisenqueueDB.minQuality or itemQuality > DisenqueueDB.maxQuality then
         return false
     end
 
@@ -219,7 +219,7 @@ end
 local function handleProtectCommand(action, arg)
     if action == "list" then
         local count = 0
-        for _ in pairs(WowDisenchantQueueDB.protectedItemIDs) do
+        for _ in pairs(DisenqueueDB.protectedItemIDs) do
             count = count + 1
         end
 
@@ -229,7 +229,7 @@ local function handleProtectCommand(action, arg)
         end
 
         chat(("Protected item IDs (%d):"):format(count))
-        for itemID in pairs(WowDisenchantQueueDB.protectedItemIDs) do
+        for itemID in pairs(DisenqueueDB.protectedItemIDs) do
             chat(tostring(itemID))
         end
         return
@@ -242,13 +242,13 @@ local function handleProtectCommand(action, arg)
     end
 
     if action == "add" then
-        WowDisenchantQueueDB.protectedItemIDs[itemID] = true
+        DisenqueueDB.protectedItemIDs[itemID] = true
         chat(("Added %d to protected list."):format(itemID))
         return
     end
 
     if action == "remove" then
-        WowDisenchantQueueDB.protectedItemIDs[itemID] = nil
+        DisenqueueDB.protectedItemIDs[itemID] = nil
         chat(("Removed %d from protected list."):format(itemID))
         return
     end
@@ -270,13 +270,13 @@ local function setQualityRange(minQ, maxQ)
         return
     end
 
-    WowDisenchantQueueDB.minQuality = minQuality
-    WowDisenchantQueueDB.maxQuality = maxQuality
+    DisenqueueDB.minQuality = minQuality
+    DisenqueueDB.maxQuality = maxQuality
     chat(("Queue quality filter set to %d-%d."):format(minQuality, maxQuality))
 end
 
-SLASH_WOWDISENCHANTQUEUE1 = "/wdq"
-SlashCmdList.WOWDISENCHANTQUEUE = function(input)
+SLASH_DISENQUEUE1 = "/wdq"
+SlashCmdList.DISENQUEUE = function(input)
     local command, rest = input:match("^(%S*)%s*(.-)$")
     command = (command or ""):lower()
 
@@ -347,7 +347,7 @@ local function createUI()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     title:SetPoint("TOP", 0, -10)
-    title:SetText("WoW Disenchant Queue")
+    title:SetText("Disenqueue")
 
     local status = frame:CreateFontString("WDQ_StatusText", "OVERLAY", "GameFontNormal")
     status:SetPoint("TOP", title, "BOTTOM", 0, -8)
