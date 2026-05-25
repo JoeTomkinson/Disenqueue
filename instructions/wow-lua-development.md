@@ -117,11 +117,17 @@ end
 
 For performing protected actions (casting spells, using items) in response to hardware events:
 
+### Cast Spell on Bag Item (macro with PreClick guards)
+
+The `/cast Spell\n/use BAG SLOT` macro pattern works because `/use` targets the
+item for the active spell cursor. The key is ensuring `/cast` **will succeed**
+before the macro fires — otherwise `/use` acts independently and can equip gear.
+
 ```lua
 local btn = CreateFrame("Button", "MySecureBtn", UIParent, "SecureActionButtonTemplate")
 btn:SetAttribute("type", "macro")
-btn:SetAttribute("macrotext", "/cast Disenchant\n/use 0 1")
-btn:Hide()
+btn:SetAttribute("macrotext", "")  -- Always start empty
+btn:RegisterForClicks("AnyDown")
 
 -- Override a key to click this button
 SetOverrideBindingClick(btn, true, "MOUSEWHEELUP", "MySecureBtn")
@@ -131,11 +137,65 @@ SetOverrideBindingClick(btn, true, "MOUSEWHEELDOWN", "MySecureBtn")
 ClearOverrideBindings(btn)
 ```
 
+### CRITICAL: PreClick + PostClick Safety Pattern
+
+The macro is **only set for a single click** and cleared immediately after.
+PreClick validates that the spell will succeed before allowing the macro:
+
+```lua
+-- Check that the spell will actually fire (not on GCD, not casting, not channeling)
+local function isSpellReady(spellName)
+    if UnitCastingInfo("player") or UnitChannelInfo("player") then
+        return false
+    end
+    local start, duration = GetSpellCooldown(spellName)
+    if start and start > 0 and duration > 0 then
+        return false  -- On GCD
+    end
+    return true
+end
+
+btn:SetScript("PreClick", function(self)
+    if InCombatLockdown() then
+        self:SetAttribute("macrotext", "")
+        return
+    end
+    if not isSpellReady("Disenchant") then
+        self:SetAttribute("macrotext", "")
+        return
+    end
+    -- Validate bag/slot item hasn't changed...
+    self:SetAttribute("macrotext", "/cast Disenchant\n/use " .. bag .. " " .. slot)
+end)
+
+-- PostClick: ALWAYS clear the macro immediately after each click
+btn:SetScript("PostClick", function(self)
+    if not InCombatLockdown() then
+        self:SetAttribute("macrotext", "")
+    end
+end)
+```
+
+### Why NOT type=spell + target-item?
+
+The wiki documents `type=spell` + `target-item` as an atomic alternative:
+```lua
+btn:SetAttribute("type", "spell")
+btn:SetAttribute("spell", "Disenchant")
+btn:SetAttribute("target-item", "0 1")  -- "bagID slotIndex"
+```
+In practice (retail 12.0+), `target-item` does **not reliably auto-target** the
+bag item. The spell enters targeting mode (cursor glows) but the item click never
+resolves. Use the guarded macro approach instead.
+
 **Rules:**
 
 - Cannot modify secure attributes during combat (`InCombatLockdown()`)
 - One hardware event = one action (Blizzard ToS)
 - Use `SecureActionButtonTemplate` for macro/spell/item types
+- Macro text must be empty between clicks (PostClick clears it)
+- PreClick must verify spell will succeed: check casting, channeling, AND GCD
+- `UnitCastingInfo` detects casts; `UnitChannelInfo` detects channels; `GetSpellCooldown` detects GCD
 
 ---
 
@@ -308,6 +368,12 @@ ag:Stop()
 4. **Bindings.xml** — Can be empty/omitted; keybinding can be done entirely in Lua with `SetOverrideBindingClick`.
 5. **`InCombatLockdown()`** — Always check before modifying secure frame attributes.
 6. **Item info caching** — `GetItemInfo()` may return nil on first call for uncached items. Use `Item:CreateFromItemLink()` callback or scan twice.
+7. **`/cast + /use` macro can equip gear** — If `/cast` fails (GCD, casting, channeling), `/use BAG SLOT` fires independently and equips items. Fix: use `isSpellReady()` check in PreClick (validates casting, channeling, AND GCD via `GetSpellCooldown`) so the macro only fires when the spell WILL succeed.
+8. **`type=spell` + `target-item` broken in retail** — The wiki documents this as atomic cast-on-item, but in retail 12.0+ it does not reliably auto-target the bag item. The spell enters targeting mode but `target-item` never resolves. Use guarded macro approach instead.
+9. **`UnitCastingInfo` vs `UnitChannelInfo`** — `UnitCastingInfo("player")` only detects casts, NOT channels. If the player is channeling, `/cast` fails. Always check BOTH in PreClick guards.
+10. **GCD check** — After a cast completes, there may be a brief GCD. `GetSpellCooldown(spellName)` returns `(start, duration)` where `start > 0` means on cooldown/GCD. Check this to prevent scrolling during GCD from firing `/use`.
+11. **PostClick for safety** — Always clear `macrotext` in PostClick. The macro should only exist for the single frame of click processing. Between hardware events, the button must be empty.
+12. **Spell ID changes per expansion** — Profession spells like Prospecting have expansion-specific variants (e.g. "Midnight Prospecting"). Match by `GetSpellInfo(spellID)` name against known spell names instead of hardcoding IDs.
 
 ---
 

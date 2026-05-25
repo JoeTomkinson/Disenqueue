@@ -1,9 +1,12 @@
 local ADDON_NAME = ...
-local ADDON_VERSION = "1.0.1"
+local ADDON_VERSION = "1.0.2"
 local DISENCHANT_SPELL_ID = 13262
+local PROSPECTING_SPELL_ID = 31252
+local MILLING_SPELL_ID = 51005
 local DEFAULT_MIN_QUALITY = 2
 local DEFAULT_MAX_QUALITY = 4
 local MIN_STACK_SIZE = 5  -- Minimum stack for Prospecting/Milling
+local POST_CAST_COOLDOWN = 0.4  -- Seconds after cast success before allowing next fire
 
 -- Processing modes
 local MODE_DISENCHANT = "disenchant"
@@ -17,9 +20,18 @@ local SPELL_NAMES = {
     [MODE_MILL] = "Milling",
 }
 
+-- Spell IDs for modern API calls (C_Spell)
+local SPELL_IDS = {
+    [MODE_DISENCHANT] = DISENCHANT_SPELL_ID,
+    [MODE_PROSPECT] = PROSPECTING_SPELL_ID,
+    [MODE_MILL] = MILLING_SPELL_ID,
+}
+
 local addon = CreateFrame("Frame", "WDQ_MainFrame")
 local queue = {}
 local isProcessing = false  -- true when actively running through the queue
+local lastCastSucceeded = 0  -- GetTime() of last successful cast (post-cast safety cooldown)
+local equippedSnapshot = {}  -- Snapshot of equipped item IDs taken on startProcessing()
 
 -- Notification categories
 local NOTIFY_SCAN = "notifyScan"         -- Bag scan results
@@ -488,6 +500,9 @@ end
 local lastNotProcessingMsg = 0
 
 -- Secure action button for disenchanting (requires hardware event)
+-- Uses type=macro with comprehensive PreClick guards to prevent accidental equip.
+-- The /cast + /use pattern works because /use targets the item for the active
+-- spell cursor. PreClick ensures the spell WILL succeed before allowing the macro.
 local secureBtn = CreateFrame("Button", "WDQ_SecureProcessButton", UIParent, "SecureActionButtonTemplate")
 secureBtn:SetSize(1, 1)
 secureBtn:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -100, 100)
@@ -495,30 +510,116 @@ secureBtn:SetAttribute("type", "macro")
 secureBtn:SetAttribute("macrotext", "")
 secureBtn:RegisterForClicks("AnyDown")
 
--- PreClick safeguard: verify the item hasn't changed before the macro fires
+-- Clears the secure button so a click is a no-op
+local function clearSecureBtn()
+    secureBtn:SetAttribute("macrotext", "")
+end
+
+-- Returns true if the profession spell is ready to cast RIGHT NOW
+-- Multi-layer validation: casting state, GCD, and comprehensive usability check.
+-- This is the primary defense against /use equipping items when /cast would fail.
+local function isSpellReady(spellName, mode)
+    -- Already casting or channeling = spell will fail
+    if UnitCastingInfo("player") or UnitChannelInfo("player") then
+        return false
+    end
+
+    -- Modern comprehensive usability check (11.0+): covers spell known,
+    -- reagents, reactive conditions, and any other reason the spell can't fire.
+    local spellID = mode and SPELL_IDS[mode] or DISENCHANT_SPELL_ID
+    if C_Spell and C_Spell.IsSpellUsable then
+        local isUsable = C_Spell.IsSpellUsable(spellID)
+        if not isUsable then
+            return false
+        end
+    end
+
+    -- GCD check via modern API first, fallback to legacy
+    if C_Spell and C_Spell.GetSpellCooldown then
+        local cdInfo = C_Spell.GetSpellCooldown(spellID)
+        if cdInfo and cdInfo.startTime and cdInfo.startTime > 0 and cdInfo.duration > 0 then
+            return false
+        end
+    else
+        local start, duration = GetSpellCooldown(spellName)
+        if start and start > 0 and duration > 0 then
+            return false
+        end
+    end
+
+    return true
+end
+
+-- PreClick safeguard: verify EVERYTHING before allowing the macro to fire.
+-- The macro is ONLY set if we are 100% certain the /cast will succeed,
+-- which means /use will target the item for the spell (not equip it).
+-- This is the CRITICAL anti-equip gate — multiple defensive layers ensure
+-- that /use can NEVER execute without a valid spell on the cursor.
 secureBtn:SetScript("PreClick", function(self)
     if InCombatLockdown() then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
     if not isProcessing or #queue == 0 then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
-    -- Block input while a cast is already in progress to prevent /use from equipping gear
+    -- Block if we're tracking a cast (event-driven flag)
     if isCasting then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
+
+    -- LAYER 1: Post-cast safety cooldown — prevents firing during server sync window
+    -- after a previous cast just completed. Covers GCD desync and loot latency.
+    if GetTime() - lastCastSucceeded < POST_CAST_COOLDOWN then
+        clearSecureBtn()
+        return
+    end
+
+    -- LAYER 2: Clear any stale cursor state that could cause equip interactions
+    ClearCursor()
+    if GetCursorInfo() then
+        -- Cursor still has something (unusual) — refuse to proceed
+        clearSecureBtn()
+        return
+    end
+
+    -- LAYER 3: Block if loot window is open (casting fails while looting)
+    if GetNumLootItems and GetNumLootItems() > 0 then
+        clearSecureBtn()
+        return
+    end
+    if LootFrame and LootFrame:IsShown() then
+        clearSecureBtn()
+        return
+    end
+
+    -- LAYER 4: Clear any pending spell targeting from a previous failed attempt
+    if SpellIsTargeting and SpellIsTargeting() then
+        SpellStopTargeting()
+        clearSecureBtn()
+        return
+    end
+
     local nextItem = queue[1]
     if not nextItem then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
-    -- Re-validate: check the item is still the same
+    -- Determine the spell for this item's mode
+    local spellName = SPELL_NAMES[nextItem.mode] or SPELL_NAMES[MODE_DISENCHANT]
+
+    -- LAYER 5: Comprehensive spell readiness (casting, channeling, GCD, usability)
+    if not isSpellReady(spellName, nextItem.mode) then
+        clearSecureBtn()
+        return
+    end
+
+    -- LAYER 6: Re-validate the item is still the same and still valid
     local currentLink = getContainerItemLink(nextItem.bag, nextItem.slot)
     if not currentLink then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         chat("Slot empty - skipping. Press again to continue.", NOTIFY_WARNINGS)
         table.remove(queue, 1)
         C_Timer.After(0.1, function() updateSecureButton(); updateStatusText(); refreshQueueList() end)
@@ -526,28 +627,51 @@ secureBtn:SetScript("PreClick", function(self)
     end
     local currentID = parseItemID(currentLink)
     if currentID ~= nextItem.itemID then
-        self:SetAttribute("macrotext", "")
+        clearSecureBtn()
         chat("Item changed in slot - skipping to prevent accidental disenchant.", NOTIFY_WARNINGS)
         table.remove(queue, 1)
         C_Timer.After(0.1, function() updateSecureButton(); updateStatusText(); refreshQueueList() end)
         return
     end
-    -- Item confirmed, macro is already set correctly
+
+    -- LAYER 7: Re-confirm item is actually a valid candidate (not equip-only gear
+    -- that somehow ended up in queue, or item that lost eligibility since scan)
+    if nextItem.mode == MODE_DISENCHANT then
+        if not isDisenchantCandidate(currentLink, nextItem.bag, nextItem.slot) then
+            clearSecureBtn()
+            chat("Item no longer valid for disenchanting - skipping.", NOTIFY_WARNINGS)
+            table.remove(queue, 1)
+            C_Timer.After(0.1, function() updateSecureButton(); updateStatusText(); refreshQueueList() end)
+            return
+        end
+    end
+
+    -- ALL checks passed — the spell WILL fire, so /use will target (not equip)
+    local macro = ("/cast %s\n/use %d %d"):format(spellName, nextItem.bag, nextItem.slot)
+    self:SetAttribute("macrotext", macro)
 end)
 
--- Updates the secure button's macro to target the next queue item
+-- PostClick: immediately clear macro after each click so the button is
+-- always in a safe no-op state between hardware events
+secureBtn:SetScript("PostClick", function(self)
+    if not InCombatLockdown() then
+        clearSecureBtn()
+    end
+end)
+
+-- Updates the secure button's spell attributes to target the next queue item
 local function updateSecureButton()
     if InCombatLockdown() then return end
 
     if not isProcessing or #queue == 0 then
-        secureBtn:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
 
     -- Validate the next item
     local nextItem = queue[1]
     if not nextItem then
-        secureBtn:SetAttribute("macrotext", "")
+        clearSecureBtn()
         return
     end
 
@@ -573,7 +697,7 @@ local function updateSecureButton()
         return
     end
 
-    -- Set macro: cast the appropriate spell then use the bag slot
+    -- Pre-set macro for the next item (PreClick will re-validate before firing)
     local spellName = SPELL_NAMES[nextItem.mode] or SPELL_NAMES[MODE_DISENCHANT]
     local macro = ("/cast %s\n/use %d %d"):format(spellName, nextItem.bag, nextItem.slot)
     secureBtn:SetAttribute("macrotext", macro)
@@ -611,6 +735,17 @@ local function startProcessing()
         return
     end
     isProcessing = true
+    lastCastSucceeded = 0  -- Reset cooldown timer on fresh start
+
+    -- Snapshot currently equipped armor for safety monitoring
+    wipe(equippedSnapshot)
+    for slot = 1, 19 do  -- All equipment slots (head through tabard)
+        local link = GetInventoryItemLink("player", slot)
+        if link then
+            equippedSnapshot[slot] = parseItemID(link)
+        end
+    end
+
     -- Disable frame mouse wheel so override binding can capture scroll
     local qf = _G.WDQ_QueueFrame
     if qf then qf:EnableMouseWheel(false) end
@@ -627,13 +762,15 @@ local function stopProcessing()
     local qf = _G.WDQ_QueueFrame
     if qf then qf:EnableMouseWheel(true) end
     unbindProcessKey()
-    secureBtn:SetAttribute("macrotext", "")
+    clearSecureBtn()
     chat("Processing stopped. You can review/edit the queue.", NOTIFY_PROCESS)
     updateStatusText()
     refreshQueueList()
 end
 
--- Called after a successful cast to advance the queue
+-- Called after a successful cast to advance the queue.
+-- Advances immediately for responsive continuous scrolling — PreClick is the
+-- real gatekeeper that prevents premature firing via post-cast cooldown.
 local function advanceQueue()
     if not isProcessing then return end
     if #queue == 0 then return end
@@ -648,13 +785,12 @@ local function advanceQueue()
             -- Stack still has enough, keep entry and re-fire
             local modeLabel = (mode == MODE_PROSPECT) and "Prospected" or "Milled"
             chat(("%s: %s (%d remaining)"):format(modeLabel, entry.itemName or "Unknown", remaining), NOTIFY_PROCESS)
-            C_Timer.After(0.3, function()
-                if isProcessing and not InCombatLockdown() then
-                    updateSecureButton()
-                    updateStatusText()
-                    refreshQueueList()
-                end
-            end)
+            -- Update immediately; PreClick's post-cast cooldown prevents premature firing
+            if not InCombatLockdown() then
+                updateSecureButton()
+                updateStatusText()
+                refreshQueueList()
+            end
             return
         end
         -- Stack depleted below minimum, remove entry
@@ -672,20 +808,22 @@ local function advanceQueue()
         local qf = _G.WDQ_QueueFrame
         if qf then qf:EnableMouseWheel(true) end
         unbindProcessKey()
-        secureBtn:SetAttribute("macrotext", "")
+        clearSecureBtn()
         chat("Queue complete!", NOTIFY_PROCESS)
         updateStatusText()
         refreshQueueList()
         return
     end
-    -- Prepare next item (delayed slightly to avoid combat lockdown from loot)
-    C_Timer.After(0.3, function()
-        if isProcessing and not InCombatLockdown() then
-            updateSecureButton()
-            updateStatusText()
-            refreshQueueList()
-        end
-    end)
+
+    -- Advance immediately for continuous scroll support.
+    -- PreClick's POST_CAST_COOLDOWN (0.4s) prevents the next macro from firing
+    -- too soon, so there's no risk of /use equipping — but the button is READY
+    -- for the next scroll tick as soon as the cooldown elapses.
+    if not InCombatLockdown() then
+        updateSecureButton()
+        updateStatusText()
+        refreshQueueList()
+    end
 end
 
 function WDQ_ProcessNextFromBinding()
@@ -1935,6 +2073,7 @@ addon:RegisterEvent("UNIT_SPELLCAST_STOP")
 addon:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 addon:RegisterEvent("UNIT_SPELLCAST_FAILED")
 addon:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+addon:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 addon:SetScript("OnEvent", function(_, event, arg1, ...)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
         normalizeDB()
@@ -1957,12 +2096,48 @@ addon:SetScript("OnEvent", function(_, event, arg1, ...)
         return
     end
 
-    -- Spellcast tracking for disenchant progress bar
+    -- SAFETY NET: Detect unexpected equipment changes during processing.
+    -- If something equipped while we're processing, halt immediately.
+    if event == "PLAYER_EQUIPMENT_CHANGED" then
+        if isProcessing then
+            local slot = arg1  -- equipmentSlot that changed
+            local expectedID = equippedSnapshot[slot]
+            local currentLink = GetInventoryItemLink("player", slot)
+            local currentID = currentLink and parseItemID(currentLink)
+
+            -- If the slot's item changed from what was snapshotted, something went wrong
+            if currentID ~= expectedID then
+                local slotName = (GetInventorySlotInfo and select(1, GetInventorySlotInfo(slot))) or ("Slot " .. slot)
+                local itemName = currentLink and (GetItemInfo(currentLink) or currentLink) or "empty"
+                chat(("|cffff3333EQUIPMENT CHANGE DETECTED!|r %s is now: %s"):format(
+                    tostring(slotName), tostring(itemName)), NOTIFY_WARNINGS)
+                chat("|cffff3333Processing halted as a safety precaution.|r Check your gear!", NOTIFY_WARNINGS)
+                stopProcessing()
+            end
+        end
+        return
+    end
+
+    -- Spellcast tracking for profession casts (Disenchant, Prospecting, Milling)
     if arg1 ~= "player" then return end
+
+    -- Determine if this spellcast is one of ours (by name for expansion-agnostic matching)
+    local function isTrackedSpell(spellID)
+        if spellID == DISENCHANT_SPELL_ID then return true end
+        if spellID == PROSPECTING_SPELL_ID then return true end
+        if spellID == MILLING_SPELL_ID then return true end
+        if not isProcessing then return false end
+        local name = GetSpellInfo(spellID)
+        if not name then return false end
+        for _, tracked in pairs(SPELL_NAMES) do
+            if name == tracked then return true end
+        end
+        return false
+    end
 
     if event == "UNIT_SPELLCAST_START" then
         local spellID = select(2, ...)
-        if spellID == DISENCHANT_SPELL_ID then
+        if isTrackedSpell(spellID) then
             local _, _, _, startMS, endMS = UnitCastingInfo("player")
             if startMS and endMS then
                 castStartTime = startMS / 1000
@@ -1973,16 +2148,26 @@ addon:SetScript("OnEvent", function(_, event, arg1, ...)
         end
     elseif event == "UNIT_SPELLCAST_SUCCEEDED" then
         local spellID = select(2, ...)
-        if spellID == DISENCHANT_SPELL_ID then
+        if isTrackedSpell(spellID) then
             isCasting = false
+            lastCastSucceeded = GetTime()  -- Record timestamp for post-cast safety cooldown
             WDQ_StopCastBarUpdate()
-            -- Advance the queue after successful disenchant
+            -- Advance the queue after successful cast
             advanceQueue()
         end
-    elseif event == "UNIT_SPELLCAST_STOP"
-        or event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
+    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
         local spellID = select(2, ...)
-        if spellID == DISENCHANT_SPELL_ID then
+        if isTrackedSpell(spellID) then
+            isCasting = false
+            WDQ_StopCastBarUpdate()
+            -- Item was NOT consumed — inform user they can retry
+            if isProcessing and #queue > 0 then
+                chat("Cast failed or interrupted — scroll again to retry.", NOTIFY_WARNINGS)
+            end
+        end
+    elseif event == "UNIT_SPELLCAST_STOP" then
+        local spellID = select(2, ...)
+        if isTrackedSpell(spellID) then
             isCasting = false
             WDQ_StopCastBarUpdate()
         end
