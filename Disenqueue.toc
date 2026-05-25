@@ -1,8 +1,8 @@
 ## Interface: 120005
 ## Title: Disenqueue
-## Notes: Queue disenchantable bag items and process one per wheel/input action.
+## Notes: Queue disenchantable bag items and process one per wheel/input action. Also supports the lesser professions (Prospecting & Milling).
 ## Author: Joe Tomkinson (Grimmvöcare - Bronzebeard)
-## Version: 1.0.0
+## Version: 1.0.1
 ## SavedVariables: DisenqueueDB
 ## IconTexture: Interface\AddOns\Disenqueue\logos\logo
 

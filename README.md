@@ -2,6 +2,8 @@
 
 A lightweight World of Warcraft addon that builds a disenchant queue from your bags and processes exactly one queued item per hardware input (button press / wheel bind), which keeps usage within Blizzard's one-action-per-input rules.
 
+Also supports the **Lesser Professions**™ — Prospecting and Milling — for those of us who recognise that Enchanting is the one true craft and everything else is just breaking rocks and grinding weeds.
+
 <img width="1024" height="1024" alt="Disenqueue" src="https://github.com/user-attachments/assets/dbcaf466-e64d-4364-9ad5-a6140991d7bc" />
 
 ## Install
@@ -33,6 +35,17 @@ A lightweight World of Warcraft addon that builds a disenchant queue from your b
 - **Item not in queue**: run `/wdq build` again after opening bags; uncached items can appear on a second scan.
 - **Nothing happens when scrolling**: confirm the wheel is bound in Key Bindings to this addon's action.
 - **"Disenchant spell not known"**: this character does not have Enchanting/Disenchant available.
+
+## Lesser Professions
+
+Enable in **Settings → AddOns → Disenqueue → Lesser Professions**.
+
+When enabled, Scan Bags will also queue:
+
+- **Prospecting** — ore stacks of 5+ (Jewelcrafting)
+- **Milling** — herb stacks of 5+ (Inscription)
+
+Items are grouped by mode in the queue (disenchants first, then prospect, then mill) and the correct spell is cast automatically. Stack-based items keep processing until the stack drops below 5.
 
 ## Recommended safety filters
 

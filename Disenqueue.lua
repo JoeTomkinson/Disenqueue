@@ -1,5 +1,5 @@
 local ADDON_NAME = ...
-local ADDON_VERSION = "1.0.0"
+local ADDON_VERSION = "1.0.1"
 local DISENCHANT_SPELL_ID = 13262
 local DEFAULT_MIN_QUALITY = 2
 local DEFAULT_MAX_QUALITY = 4
@@ -115,6 +115,11 @@ local function normalizeDB()
         DisenqueueDB.notifyQueue = true
     end
 
+    -- Soulbound filter (when true, only soulbound gear is queued for DE)
+    if type(DisenqueueDB.soulboundOnly) ~= "boolean" then
+        DisenqueueDB.soulboundOnly = false
+    end
+
     -- Lesser Professions defaults
     if type(DisenqueueDB.lesserProfsEnabled) ~= "boolean" then
         DisenqueueDB.lesserProfsEnabled = false
@@ -138,7 +143,34 @@ local function isProtected(itemID)
     return itemID and DisenqueueDB.protectedItemIDs[itemID] ~= nil
 end
 
-local function isDisenchantCandidate(itemLink)
+local function isItemBound(bag, slot)
+    if C_Item and C_Item.IsBound then
+        local itemLocation = ItemLocation:CreateFromBagAndSlot(bag, slot)
+        if itemLocation and itemLocation:IsValid() then
+            return C_Item.IsBound(itemLocation)
+        end
+    end
+    -- Fallback: scan tooltip for ITEM_SOULBOUND text
+    if not _G.WDQ_ScanTip then
+        CreateFrame("GameTooltip", "WDQ_ScanTip", nil, "GameTooltipTemplate")
+    end
+    local tip = _G.WDQ_ScanTip
+    tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    tip:ClearLines()
+    tip:SetBagItem(bag, slot)
+    for i = 2, tip:NumLines() do
+        local text = _G["WDQ_ScanTipTextLeft" .. i]
+        if text then
+            local line = text:GetText()
+            if line == ITEM_SOULBOUND or line == ITEM_BNETACCOUNTBOUND or line == ITEM_ACCOUNTBOUND then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function isDisenchantCandidate(itemLink, bag, slot)
     local itemName, _, itemQuality, _, _, _, _, _, _, _, _, classID, subClassID = GetItemInfo(itemLink)
     if not itemName or not itemQuality or not classID then
         return false
@@ -157,6 +189,13 @@ local function isDisenchantCandidate(itemLink)
     local itemID = parseItemID(itemLink)
     if isProtected(itemID) then
         return false
+    end
+
+    -- Soulbound filter: skip non-bound items when setting is enabled
+    if DisenqueueDB.soulboundOnly and bag and slot then
+        if not isItemBound(bag, slot) then
+            return false
+        end
     end
 
     return true
@@ -403,7 +442,7 @@ local function rebuildQueue()
         local slots = getContainerNumSlots(bag)
         for slot = 1, slots do
             local itemLink = getContainerItemLink(bag, slot)
-            if itemLink and isDisenchantCandidate(itemLink) then
+            if itemLink and isDisenchantCandidate(itemLink, bag, slot) then
                 queueItem(bag, slot, itemLink, MODE_DISENCHANT)
             end
         end
@@ -463,6 +502,11 @@ secureBtn:SetScript("PreClick", function(self)
         return
     end
     if not isProcessing or #queue == 0 then
+        self:SetAttribute("macrotext", "")
+        return
+    end
+    -- Block input while a cast is already in progress to prevent /use from equipping gear
+    if isCasting then
         self:SetAttribute("macrotext", "")
         return
     end
@@ -1602,7 +1646,10 @@ local PROCESS_KEY_OPTIONS = {
 }
 
 function WDQ_RegisterSettings()
-    local category = Settings.RegisterVerticalLayoutCategory("Disenqueue")
+    local category, layout = Settings.RegisterVerticalLayoutCategory("Disenqueue")
+
+    -- Section: General
+    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("General"))
 
     -- Process Key dropdown
     do
@@ -1692,6 +1739,27 @@ function WDQ_RegisterSettings()
 
         Settings.CreateDropdown(category, setting, GetOptions, "Maximum item quality to include when scanning bags.")
     end
+
+    -- Soulbound Only toggle
+    do
+        local name = "Soulbound Only"
+        local variable = "DisenqueueSoulboundOnly"
+        local defaultValue = false
+
+        local function GetValue()
+            return DisenqueueDB.soulboundOnly
+        end
+
+        local function SetValue(value)
+            DisenqueueDB.soulboundOnly = value
+        end
+
+        local setting = Settings.RegisterProxySetting(category, variable, type(defaultValue), name, defaultValue, GetValue, SetValue)
+        Settings.CreateCheckbox(category, setting, "When enabled, only soulbound gear is queued for disenchanting. Non-bound items (tradeable/AH-sellable) are excluded.")
+    end
+
+    -- Section: Notifications
+    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("Notifications"))
 
     -- Chat notification toggles
     do
@@ -1801,7 +1869,8 @@ function WDQ_RegisterSettings()
         descStr:SetPoint("TOPLEFT", logo, "BOTTOMLEFT", 0, -16)
         descStr:SetPoint("RIGHT", aboutFrame, "RIGHT", -20, 0)
         descStr:SetJustifyH("LEFT")
-        descStr:SetText("Queue disenchantable items from your bags and process them one at a time with a configurable key or scroll wheel.")
+        descStr:SetWordWrap(true)
+        descStr:SetText("Queue disenchantable items from your bags and process them one at a time with a configurable key or scroll wheel.\n\nAlso supports the Lesser Professions (Prospecting & Milling) for those who recognise that Enchanting is the one true craft.\n\nDisenqueue is designed to strictly adhere to Blizzard's Terms of Service. Every action requires a deliberate user input — one keypress or scroll tick produces exactly one in-game action. No automation, no queued inputs, no unattended play. Just a smarter workflow that respects the rules.")
 
         local authorStr = aboutFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
         authorStr:SetPoint("TOPLEFT", descStr, "BOTTOMLEFT", 0, -12)
