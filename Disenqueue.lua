@@ -32,6 +32,8 @@ local queue = {}
 local isProcessing = false  -- true when actively running through the queue
 local lastCastSucceeded = 0  -- GetTime() of last successful cast (post-cast safety cooldown)
 local equippedSnapshot = {}  -- Snapshot of equipped item IDs taken on startProcessing()
+local failStrikes = {}       -- [queueIndex1_itemID] = count; tracks consecutive cast failures per item
+local MAX_FAIL_STRIKES = 2   -- Auto-skip after this many consecutive failures on same item
 
 -- Notification categories
 local NOTIFY_SCAN = "notifyScan"         -- Bag scan results
@@ -182,13 +184,92 @@ local function isItemBound(bag, slot)
     return false
 end
 
+local function isItemRefundable(bag, slot)
+    if not bag or not slot then return false end
+    if C_Item and C_Item.CanBeRefunded then
+        local itemLocation = ItemLocation:CreateFromBagAndSlot(bag, slot)
+        if itemLocation and itemLocation:IsValid() then
+            return C_Item.CanBeRefunded(itemLocation)
+        end
+    end
+    return false
+end
+
+local function hasCannotDisenchantLine(bag, slot)
+    if not bag or not slot then return false end
+    -- Modern structured tooltip API (10.0+)
+    if C_TooltipInfo and C_TooltipInfo.GetBagItem then
+        local data = C_TooltipInfo.GetBagItem(bag, slot)
+        if data and data.lines then
+            for _, line in ipairs(data.lines) do
+                -- ErrorLine type (41) added in 12.0.1 — definitive non-DE marker
+                if line.type and line.type == 41 and line.leftText
+                    and line.leftText:find("[Dd]isenchant") then
+                    return true
+                end
+                if line.leftText then
+                    -- Match against known global strings for the tooltip text
+                    local text = line.leftText
+                    if text == (_G.ITEM_DISENCHANT_NOT_DISENCHANTABLE or "")
+                        or text == (_G.ERR_CANT_BE_DISENCHANTED or "")
+                        or text == "Cannot be disenchanted"
+                        or text == "Item cannot be disenchanted" then
+                        return true
+                    end
+                    -- Secondary: any red-colored line mentioning disenchant
+                    if line.leftColor and line.leftColor.r and line.leftColor.r > 0.9
+                        and line.leftColor.g < 0.2 and line.leftColor.b < 0.2 then
+                        if text:find("[Dd]isenchant") then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+        return false
+    end
+    -- Fallback: hidden tooltip scanning
+    if not _G.WDQ_ScanTip then
+        CreateFrame("GameTooltip", "WDQ_ScanTip", nil, "GameTooltipTemplate")
+    end
+    local tip = _G.WDQ_ScanTip
+    tip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    tip:ClearLines()
+    tip:SetBagItem(bag, slot)
+    for i = 2, tip:NumLines() do
+        local textObj = _G["WDQ_ScanTipTextLeft" .. i]
+        if textObj then
+            local line = textObj:GetText()
+            if not line then break end
+            -- Exact match against known strings
+            if line == (_G.ITEM_DISENCHANT_NOT_DISENCHANTABLE or "")
+                or line == (_G.ERR_CANT_BE_DISENCHANTED or "")
+                or line == "Cannot be disenchanted"
+                or line == "Item cannot be disenchanted" then
+                return true
+            end
+            -- Red-colored line mentioning disenchant
+            local r, g, b = textObj:GetTextColor()
+            if r and r > 0.9 and g < 0.2 and b < 0.2 and line:find("[Dd]isenchant") then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function isDisenchantCandidate(itemLink, bag, slot)
-    local itemName, _, itemQuality, _, _, _, _, _, _, _, _, classID, subClassID = GetItemInfo(itemLink)
+    local itemName, _, itemQuality, _, _, _, _, _, _, _, _, classID, subClassID, bindType = GetItemInfo(itemLink)
     if not itemName or not itemQuality or not classID then
         return false
     end
 
     if itemQuality < DisenqueueDB.minQuality or itemQuality > DisenqueueDB.maxQuality then
+        return false
+    end
+
+    -- Quest items (bindType 4) cannot be disenchanted
+    if bindType and bindType == 4 then
         return false
     end
 
@@ -208,6 +289,16 @@ local function isDisenchantCandidate(itemLink, bag, slot)
         if not isItemBound(bag, slot) then
             return false
         end
+    end
+
+    -- Skip items still in vendor refund window
+    if isItemRefundable(bag, slot) then
+        return false
+    end
+
+    -- Definitive server-side check: tooltip says "Cannot be disenchanted"
+    if hasCannotDisenchantLine(bag, slot) then
+        return false
     end
 
     return true
@@ -445,6 +536,7 @@ end
 local function rebuildQueue()
     clearQueue()
     isProcessing = false
+    wipe(failStrikes)
 
     local backpackStart = _G.BACKPACK_CONTAINER or 0
     local backpackEnd = _G.NUM_BAG_SLOTS or 4
@@ -777,6 +869,11 @@ local function advanceQueue()
 
     local entry = queue[1]
     local mode = entry and entry.mode or MODE_DISENCHANT
+
+    -- Clear strike counter on successful advance
+    if entry and entry.itemID then
+        failStrikes[tostring(entry.itemID)] = nil
+    end
 
     -- For stack-based modes (prospect/mill), check if stack still has enough
     if mode == MODE_PROSPECT or mode == MODE_MILL then
@@ -1615,9 +1712,12 @@ end
 local MAX_LOCKED_ROWS = 8
 local lockedRows = {}
 
+local LOCKED_HEADER_HEIGHT = 44
+local LOCKED_FOOTER_HEIGHT = 26
+
 local function createLockedPanel()
     local panel = CreateFrame("Frame", "WDQ_LockedPanel", UIParent, "BackdropTemplate")
-    panel:SetSize(240, 50 + MAX_LOCKED_ROWS * 22)
+    panel:SetSize(240, LOCKED_HEADER_HEIGHT + MAX_LOCKED_ROWS * 22 + LOCKED_FOOTER_HEIGHT + 12)
     panel:SetMovable(true)
     panel:EnableMouse(true)
     panel:RegisterForDrag("LeftButton")
@@ -1641,25 +1741,56 @@ local function createLockedPanel()
         panel:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
     end
 
-    -- Title
-    local title = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("Locked Items")
+    -- Header bar (matches main UI style)
+    local headerBar = CreateFrame("Frame", nil, panel)
+    headerBar:SetPoint("TOPLEFT", 4, -4)
+    headerBar:SetPoint("TOPRIGHT", -4, -4)
+    headerBar:SetHeight(LOCKED_HEADER_HEIGHT - 8)
+    local headerBg = headerBar:CreateTexture(nil, "BACKGROUND")
+    headerBg:SetAllPoints()
+    headerBg:SetColorTexture(0.08, 0.08, 0.08, 0.9)
 
-    -- Close button
-    local closeBtn = CreateFrame("Button", nil, panel, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", -2, -2)
+    -- Separator line below header
+    local headerSep = panel:CreateTexture(nil, "ARTWORK")
+    headerSep:SetPoint("TOPLEFT", 6, -LOCKED_HEADER_HEIGHT + 2)
+    headerSep:SetPoint("TOPRIGHT", -6, -LOCKED_HEADER_HEIGHT + 2)
+    headerSep:SetHeight(1)
+    headerSep:SetColorTexture(0.3, 0.3, 0.3, 0.6)
+
+    -- Lock icon (left-aligned in header)
+    local lockIcon = headerBar:CreateTexture(nil, "ARTWORK")
+    lockIcon:SetSize(18, 18)
+    lockIcon:SetPoint("LEFT", 8, 0)
+    lockIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\lock")
+
+    -- Title (left-aligned next to icon)
+    local title = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    title:SetPoint("LEFT", lockIcon, "RIGHT", 7, 0)
+    title:SetText("|cffccccccLocked Items|r")
+    title:SetJustifyH("LEFT")
+
+    -- Close button (matches main UI icon button style)
+    local closeBtn = CreateFrame("Button", nil, headerBar)
+    closeBtn:SetSize(24, 24)
+    closeBtn:SetPoint("RIGHT", headerBar, "RIGHT", -6, 0)
+    local closeBg = closeBtn:CreateTexture(nil, "BACKGROUND")
+    closeBg:SetPoint("TOPLEFT", 2, -2)
+    closeBg:SetPoint("BOTTOMRIGHT", -2, 2)
+    closeBg:SetColorTexture(0.18, 0.18, 0.18, 0.9)
+    local closeIcon = closeBtn:CreateTexture(nil, "ARTWORK")
+    closeIcon:SetPoint("TOPLEFT", 4, -4)
+    closeIcon:SetPoint("BOTTOMRIGHT", -4, 4)
+    closeIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\close")
+    local closeHl = closeBtn:CreateTexture(nil, "HIGHLIGHT")
+    closeHl:SetPoint("TOPLEFT", 2, -2)
+    closeHl:SetPoint("BOTTOMRIGHT", -2, 2)
+    closeHl:SetColorTexture(1, 1, 1, 0.1)
     closeBtn:SetScript("OnClick", function() panel:Hide() end)
-
-    -- Count text
-    local countText = panel:CreateFontString("WDQ_LockedCount", "OVERLAY", "GameFontNormal")
-    countText:SetPoint("TOP", title, "BOTTOM", 0, -4)
-    countText:SetTextColor(0.7, 0.7, 0.7)
 
     -- List area
     local listArea = CreateFrame("Frame", nil, panel)
-    listArea:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -44)
-    listArea:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -44)
+    listArea:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -LOCKED_HEADER_HEIGHT)
+    listArea:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -LOCKED_HEADER_HEIGHT)
     listArea:SetHeight(MAX_LOCKED_ROWS * 22)
 
     -- Empty text
@@ -1683,8 +1814,16 @@ local function createLockedPanel()
         iconTex:SetPoint("LEFT", 4, 0)
         row.icon = iconTex
 
+        local statusIcon = row:CreateTexture(nil, "ARTWORK")
+        statusIcon:SetSize(12, 12)
+        statusIcon:SetPoint("LEFT", iconTex, "RIGHT", 4, 0)
+        statusIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\circle")
+        statusIcon:SetVertexColor(0.38, 1.0, 0.38)
+        statusIcon:Hide()
+        row.statusIcon = statusIcon
+
         local nameStr = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        nameStr:SetPoint("LEFT", iconTex, "RIGHT", 6, 0)
+        nameStr:SetPoint("LEFT", statusIcon, "RIGHT", 4, 0)
         nameStr:SetPoint("RIGHT", row, "RIGHT", -24, 0)
         nameStr:SetJustifyH("LEFT")
         nameStr:SetWordWrap(false)
@@ -1717,6 +1856,10 @@ local function createLockedPanel()
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                 GameTooltip:SetItemByID(self.itemID)
                 GameTooltip:AddLine(" ")
+                local entry = DisenqueueDB.protectedItemIDs[self.itemID]
+                if type(entry) == "table" and entry.autoProtected then
+                    GameTooltip:AddLine("Auto-blocked (failed to disenchant)", 0.8, 0.5, 0.2)
+                end
                 GameTooltip:AddLine("Click to unlock", 0.2, 1, 0.2)
                 GameTooltip:Show()
             end
@@ -1730,6 +1873,27 @@ local function createLockedPanel()
         lockedRows[i] = row
     end
 
+    -- Footer bar
+    local footerBar = CreateFrame("Frame", nil, panel)
+    footerBar:SetPoint("BOTTOMLEFT", 4, 4)
+    footerBar:SetPoint("BOTTOMRIGHT", -4, 4)
+    footerBar:SetHeight(LOCKED_FOOTER_HEIGHT - 4)
+    local footerBg = footerBar:CreateTexture(nil, "BACKGROUND")
+    footerBg:SetAllPoints()
+    footerBg:SetColorTexture(0.08, 0.08, 0.08, 0.9)
+
+    -- Separator line above footer
+    local footerSep = panel:CreateTexture(nil, "ARTWORK")
+    footerSep:SetPoint("BOTTOMLEFT", 6, LOCKED_FOOTER_HEIGHT)
+    footerSep:SetPoint("BOTTOMRIGHT", -6, LOCKED_FOOTER_HEIGHT)
+    footerSep:SetHeight(1)
+    footerSep:SetColorTexture(0.3, 0.3, 0.3, 0.6)
+
+    -- Count text in footer
+    local countText = footerBar:CreateFontString("WDQ_LockedCount", "OVERLAY", "GameFontNormalSmall")
+    countText:SetPoint("CENTER", footerBar, "CENTER", 0, 0)
+    countText:SetTextColor(0.4, 0.75, 0.4)
+
     panel:Hide()
 end
 
@@ -1737,16 +1901,34 @@ function _G.WDQ_RefreshLockedList()
     local panel = _G.WDQ_LockedPanel
     if not panel then return end
 
-    local items = {}
+    local manualItems = {}
+    local autoItems = {}
     for itemID, entry in pairs(DisenqueueDB.protectedItemIDs) do
         local name = (type(entry) == "table" and entry.name) or tostring(itemID)
-        table.insert(items, { itemID = itemID, name = name })
+        local isAuto = (type(entry) == "table" and entry.autoProtected) or false
+        if isAuto then
+            table.insert(autoItems, { itemID = itemID, name = name, autoProtected = true })
+        else
+            table.insert(manualItems, { itemID = itemID, name = name, autoProtected = false })
+        end
     end
-    table.sort(items, function(a, b) return a.name < b.name end)
+    table.sort(manualItems, function(a, b) return a.name < b.name end)
+    table.sort(autoItems, function(a, b) return a.name < b.name end)
+
+    -- Combine: manual first, then auto-protected at the bottom
+    local items = {}
+    for _, v in ipairs(manualItems) do table.insert(items, v) end
+    for _, v in ipairs(autoItems) do table.insert(items, v) end
 
     local countText = _G.WDQ_LockedCount
     if countText then
-        countText:SetText(("%d item(s) locked"):format(#items))
+        local autoCount = #autoItems
+        if autoCount > 0 then
+            countText:SetText(
+                ("|cff60ff60%d locked|r  |cffcc8833%d auto-blocked|r"):format(#manualItems, autoCount))
+        else
+            countText:SetText(("|cff60ff60%d item(s) locked|r"):format(#items))
+        end
     end
 
     local emptyText = _G.WDQ_LockedEmpty
@@ -1763,8 +1945,22 @@ function _G.WDQ_RefreshLockedList()
             row.itemID = entry.itemID
             local icon = GetItemIcon(entry.itemID)
             row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
-            row.nameText:SetText(entry.name)
-            row.nameText:SetTextColor(0.6, 0.6, 0.6)
+            row.nameText:ClearAllPoints()
+            if entry.autoProtected then
+                -- Auto-protected: show with prefix tag and muted orange color
+                row.nameText:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+                row.nameText:SetPoint("RIGHT", row, "RIGHT", -24, 0)
+                row.nameText:SetText("|cff888888[Auto]|r " .. entry.name)
+                row.nameText:SetTextColor(0.8, 0.5, 0.2)
+                row.statusIcon:Hide()
+            else
+                -- Manually locked: green circle icon
+                row.nameText:SetPoint("LEFT", row.statusIcon, "RIGHT", 4, 0)
+                row.nameText:SetPoint("RIGHT", row, "RIGHT", -24, 0)
+                row.nameText:SetText(entry.name)
+                row.nameText:SetTextColor(0.6, 0.6, 0.6)
+                row.statusIcon:Show()
+            end
             row:Show()
         else
             row.itemID = nil
@@ -1787,7 +1983,7 @@ function WDQ_RegisterSettings()
     local category, layout = Settings.RegisterVerticalLayoutCategory("Disenqueue")
 
     -- Section: General
-    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("General"))
+    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("|cff60ff60General|r"))
 
     -- Process Key dropdown
     do
@@ -1897,7 +2093,7 @@ function WDQ_RegisterSettings()
     end
 
     -- Section: Notifications
-    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("Notifications"))
+    layout:AddInitializer(CreateSettingsListSectionHeaderInitializer("|cff60ff60Notifications|r"))
 
     -- Chat notification toggles
     do
@@ -1927,7 +2123,7 @@ function WDQ_RegisterSettings()
 
         local titleStr = lpFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         titleStr:SetPoint("TOPLEFT", 20, -16)
-        titleStr:SetText("Lesser Professions")
+        titleStr:SetText("|cff60ff60Lesser Professions|r")
 
         local descStr = lpFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         descStr:SetPoint("TOPLEFT", titleStr, "BOTTOMLEFT", 0, -6)
@@ -1984,6 +2180,54 @@ function WDQ_RegisterSettings()
         Settings.RegisterCanvasLayoutSubcategory(category, lpFrame, "Lesser Professions")
     end
 
+    -- Slash Commands subcategory
+    do
+        local cmdFrame = CreateFrame("Frame", nil, UIParent)
+        cmdFrame:SetSize(400, 320)
+        cmdFrame:Hide()
+
+        local titleStr = cmdFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        titleStr:SetPoint("TOPLEFT", 20, -16)
+        titleStr:SetText("|cff60ff60Slash Commands|r")
+
+        local descStr = cmdFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        descStr:SetPoint("TOPLEFT", titleStr, "BOTTOMLEFT", 0, -6)
+        descStr:SetPoint("RIGHT", cmdFrame, "RIGHT", -20, 0)
+        descStr:SetJustifyH("LEFT")
+        descStr:SetWordWrap(true)
+        descStr:SetText("All commands use the |cffffffcc/wdq|r prefix.")
+
+        local commands = {
+            { cmd = "/wdq build",    desc = "Scan bags and populate the queue" },
+            { cmd = "/wdq start",    desc = "Begin processing (enables key/scroll to disenchant)" },
+            { cmd = "/wdq stop",     desc = "Pause processing" },
+            { cmd = "/wdq next",     desc = "Process one queued item" },
+            { cmd = "/wdq list",     desc = "Print queued items to chat" },
+            { cmd = "/wdq clear",    desc = "Clear the current queue" },
+            { cmd = "/wdq quality <min> <max>", desc = "Set item quality filter (0\226\128\1474)" },
+            { cmd = "/wdq protect add <item>",  desc = "Lock an item from being queued" },
+            { cmd = "/wdq protect remove <item>", desc = "Unlock a previously locked item" },
+            { cmd = "/wdq protect list", desc = "List all locked items" },
+            { cmd = "/wdq ui",       desc = "Toggle the queue window" },
+            { cmd = "/wdq help",     desc = "Show command list in chat" },
+        }
+
+        local yOff = -8
+        local prevAnchor = descStr
+        for _, entry in ipairs(commands) do
+            local line = cmdFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            line:SetPoint("TOPLEFT", prevAnchor, "BOTTOMLEFT", 0, yOff)
+            line:SetPoint("RIGHT", cmdFrame, "RIGHT", -20, 0)
+            line:SetJustifyH("LEFT")
+            line:SetWordWrap(false)
+            line:SetText("|cffffffcc" .. entry.cmd .. "|r  |cffaaaaaa\226\128\148|r  " .. entry.desc)
+            prevAnchor = line
+            yOff = -4
+        end
+
+        Settings.RegisterCanvasLayoutSubcategory(category, cmdFrame, "Slash Commands")
+    end
+
     -- About subcategory with logo and addon info
     do
         local aboutFrame = CreateFrame("Frame", nil, UIParent)
@@ -1997,11 +2241,11 @@ function WDQ_RegisterSettings()
 
         local titleStr = aboutFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         titleStr:SetPoint("TOPLEFT", logo, "TOPRIGHT", 14, -4)
-        titleStr:SetText("Disenqueue")
+        titleStr:SetText("|cff60ff60Disenqueue|r")
 
         local versionStr = aboutFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         versionStr:SetPoint("TOPLEFT", titleStr, "BOTTOMLEFT", 0, -4)
-        versionStr:SetText("v" .. ADDON_VERSION)
+        versionStr:SetText("|cffffffccv" .. ADDON_VERSION .. "|r")
 
         local descStr = aboutFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         descStr:SetPoint("TOPLEFT", logo, "BOTTOMLEFT", 0, -16)
@@ -2072,7 +2316,9 @@ addon:RegisterEvent("UNIT_SPELLCAST_START")
 addon:RegisterEvent("UNIT_SPELLCAST_STOP")
 addon:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 addon:RegisterEvent("UNIT_SPELLCAST_FAILED")
+addon:RegisterEvent("UNIT_SPELLCAST_FAILED_QUIET")
 addon:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+addon:RegisterEvent("UI_ERROR_MESSAGE")
 addon:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 addon:SetScript("OnEvent", function(_, event, arg1, ...)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
@@ -2118,6 +2364,35 @@ addon:SetScript("OnEvent", function(_, event, arg1, ...)
         return
     end
 
+    -- UI_ERROR_MESSAGE: Catch "Item cannot be disenchanted" error from the server
+    -- This fires when the game explicitly rejects a disenchant attempt
+    if event == "UI_ERROR_MESSAGE" then
+        if isProcessing and #queue > 0 then
+            local message = select(1, ...)
+            -- ERR_CANT_BE_DISENCHANTED is the global string constant
+            local errText = _G.ERR_CANT_BE_DISENCHANTED or "Item cannot be disenchanted"
+            if message and (message == errText or message:find("[Dd]isenchant")) then
+                local entry = queue[1]
+                if entry then
+                    -- Immediately skip — server has definitively rejected this item
+                    chat(("|cffff3333%s|r cannot be disenchanted (server rejected). Skipping."):format(
+                        entry.itemName or "Unknown"), NOTIFY_WARNINGS)
+                    local strikeKey = tostring(entry.itemID or 0)
+                    failStrikes[strikeKey] = nil
+                    table.remove(queue, 1)
+                    -- Auto-protect so it won't appear in future scans
+                    if entry.itemID and not isProtected(entry.itemID) then
+                        DisenqueueDB.protectedItemIDs[entry.itemID] = { name = entry.itemName or tostring(entry.itemID), autoProtected = true }
+                        chat(("|cff888888Auto-protected item %d (%s) to prevent future queueing.|r"):format(
+                            entry.itemID, entry.itemName or "Unknown"), NOTIFY_WARNINGS)
+                    end
+                    C_Timer.After(0.1, function() updateSecureButton(); updateStatusText(); refreshQueueList() end)
+                end
+            end
+        end
+        return
+    end
+
     -- Spellcast tracking for profession casts (Disenchant, Prospecting, Milling)
     if arg1 ~= "player" then return end
 
@@ -2127,7 +2402,12 @@ addon:SetScript("OnEvent", function(_, event, arg1, ...)
         if spellID == PROSPECTING_SPELL_ID then return true end
         if spellID == MILLING_SPELL_ID then return true end
         if not isProcessing then return false end
-        local name = GetSpellInfo(spellID)
+        local name
+        if C_Spell and C_Spell.GetSpellName then
+            name = C_Spell.GetSpellName(spellID)
+        elseif GetSpellInfo then
+            name = GetSpellInfo(spellID)
+        end
         if not name then return false end
         for _, tracked in pairs(SPELL_NAMES) do
             if name == tracked then return true end
@@ -2155,14 +2435,36 @@ addon:SetScript("OnEvent", function(_, event, arg1, ...)
             -- Advance the queue after successful cast
             advanceQueue()
         end
-    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_INTERRUPTED" then
+    elseif event == "UNIT_SPELLCAST_FAILED" or event == "UNIT_SPELLCAST_FAILED_QUIET"
+        or event == "UNIT_SPELLCAST_INTERRUPTED" then
         local spellID = select(2, ...)
         if isTrackedSpell(spellID) then
             isCasting = false
             WDQ_StopCastBarUpdate()
-            -- Item was NOT consumed — inform user they can retry
+            -- Track consecutive failures on the current item
             if isProcessing and #queue > 0 then
-                chat("Cast failed or interrupted — scroll again to retry.", NOTIFY_WARNINGS)
+                local entry = queue[1]
+                if entry then
+                    local strikeKey = tostring(entry.itemID or 0)
+                    failStrikes[strikeKey] = (failStrikes[strikeKey] or 0) + 1
+                    if failStrikes[strikeKey] >= MAX_FAIL_STRIKES then
+                        -- Auto-skip: move to end of queue and auto-protect
+                        chat(("|cffff8800Auto-skipping|r %s — failed %d times (likely non-disenchantable)."):format(
+                            entry.itemName or "Unknown", failStrikes[strikeKey]), NOTIFY_WARNINGS)
+                        failStrikes[strikeKey] = nil
+                        table.remove(queue, 1)
+                        -- Auto-protect so it won't appear in future scans
+                        if entry.itemID and not isProtected(entry.itemID) then
+                            DisenqueueDB.protectedItemIDs[entry.itemID] = { name = entry.itemName or tostring(entry.itemID), autoProtected = true }
+                            chat(("|cff888888Auto-protected item %d (%s) to prevent future queueing.|r"):format(
+                                entry.itemID, entry.itemName or "Unknown"), NOTIFY_WARNINGS)
+                        end
+                        C_Timer.After(0.1, function() updateSecureButton(); updateStatusText(); refreshQueueList() end)
+                    else
+                        chat(("Cast failed — scroll again to retry (%d/%d before auto-skip)."):format(
+                            failStrikes[strikeKey], MAX_FAIL_STRIKES), NOTIFY_WARNINGS)
+                    end
+                end
             end
         end
     elseif event == "UNIT_SPELLCAST_STOP" then
