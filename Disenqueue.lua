@@ -49,6 +49,17 @@ local function chat(message, category)
     DEFAULT_CHAT_FRAME:AddMessage("|cff69ccf0WDQ|r: " .. message)
 end
 
+-- Smart tooltip anchor: always left or right of the owner, never overlapping
+local function anchorTooltip(owner)
+    local centerX = owner:GetCenter()
+    local screenWidth = GetScreenWidth()
+    if centerX and centerX > screenWidth / 2 then
+        GameTooltip:SetOwner(owner, "ANCHOR_LEFT")
+    else
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    end
+end
+
 local function getContainerNumSlots(bag)
     if C_Container and C_Container.GetContainerNumSlots then
         return C_Container.GetContainerNumSlots(bag)
@@ -1238,7 +1249,7 @@ local function createUI()
         end
     end)
     lockBtn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        anchorTooltip(self)
         GameTooltip:AddLine("Locked Items", 1, 0.82, 0)
         GameTooltip:AddLine("View/unlock permanently hidden items", 1, 1, 1)
         GameTooltip:Show()
@@ -1319,7 +1330,7 @@ local function createUI()
             end
         end)
         lockRowBtn:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            anchorTooltip(self)
             GameTooltip:AddLine("Lock Item", 1, 0.82, 0)
             GameTooltip:AddLine("Never show this item again", 1, 1, 1)
             GameTooltip:Show()
@@ -1347,7 +1358,7 @@ local function createUI()
             end
         end)
         removeRowBtn:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            anchorTooltip(self)
             GameTooltip:AddLine("Remove", 1, 0.4, 0.4)
             GameTooltip:AddLine("Remove from this queue only", 1, 1, 1)
             GameTooltip:Show()
@@ -1360,7 +1371,7 @@ local function createUI()
             local dataIndex = self.dataIndex
             if dataIndex and dataIndex <= #queue then
                 local entry = queue[dataIndex]
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                anchorTooltip(self)
                 GameTooltip:SetBagItem(entry.bag, entry.slot)
                 GameTooltip:Show()
             end
@@ -1696,7 +1707,7 @@ local function createMinimapButton()
 
     -- Tooltip
     minimapBtn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        anchorTooltip(self)
         GameTooltip:AddLine("Disenqueue")
         GameTooltip:AddLine("Click: Toggle queue window", 1, 1, 1)
         GameTooltip:AddLine("Alt+Click bag items to add to queue", 1, 1, 1)
@@ -1711,9 +1722,15 @@ end
 -- Locked Items panel
 local MAX_LOCKED_ROWS = 8
 local lockedRows = {}
+local lockedScrollOffset = 0
 
 local LOCKED_HEADER_HEIGHT = 44
 local LOCKED_FOOTER_HEIGHT = 26
+
+-- Forward declarations for import/export (defined after panel)
+local showImportDialog
+local exportLockedList
+local importLockedList
 
 local function createLockedPanel()
     local panel = CreateFrame("Frame", "WDQ_LockedPanel", UIParent, "BackdropTemplate")
@@ -1761,7 +1778,7 @@ local function createLockedPanel()
     local lockIcon = headerBar:CreateTexture(nil, "ARTWORK")
     lockIcon:SetSize(18, 18)
     lockIcon:SetPoint("LEFT", 8, 0)
-    lockIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\lock")
+    lockIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\lock-closed")
 
     -- Title (left-aligned next to icon)
     local title = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -1787,11 +1804,72 @@ local function createLockedPanel()
     closeHl:SetColorTexture(1, 1, 1, 0.1)
     closeBtn:SetScript("OnClick", function() panel:Hide() end)
 
+    -- Import button (left of close)
+    local importBtn = CreateFrame("Button", nil, headerBar)
+    importBtn:SetSize(24, 24)
+    importBtn:SetPoint("RIGHT", closeBtn, "LEFT", -2, 0)
+    local importBg = importBtn:CreateTexture(nil, "BACKGROUND")
+    importBg:SetPoint("TOPLEFT", 2, -2)
+    importBg:SetPoint("BOTTOMRIGHT", -2, 2)
+    importBg:SetColorTexture(0.18, 0.18, 0.18, 0.9)
+    local importIcon = importBtn:CreateTexture(nil, "ARTWORK")
+    importIcon:SetPoint("TOPLEFT", 4, -4)
+    importIcon:SetPoint("BOTTOMRIGHT", -4, 4)
+    importIcon:SetAtlas("bags-icon-addslots")
+    local importHl = importBtn:CreateTexture(nil, "HIGHLIGHT")
+    importHl:SetPoint("TOPLEFT", 2, -2)
+    importHl:SetPoint("BOTTOMRIGHT", -2, 2)
+    importHl:SetColorTexture(1, 1, 1, 0.1)
+    importBtn:SetScript("OnClick", function() showImportDialog(importLockedList) end)
+    importBtn:SetScript("OnEnter", function(self)
+        anchorTooltip(self)
+        GameTooltip:SetText("Import Locked List")
+        GameTooltip:AddLine("Paste an exported string to add items", 0.7, 0.7, 0.7, true)
+        GameTooltip:Show()
+    end)
+    importBtn:SetScript("OnLeave", GameTooltip_Hide)
+
+    -- Export button (left of import)
+    local exportBtn = CreateFrame("Button", nil, headerBar)
+    exportBtn:SetSize(24, 24)
+    exportBtn:SetPoint("RIGHT", importBtn, "LEFT", -2, 0)
+    local exportBg = exportBtn:CreateTexture(nil, "BACKGROUND")
+    exportBg:SetPoint("TOPLEFT", 2, -2)
+    exportBg:SetPoint("BOTTOMRIGHT", -2, 2)
+    exportBg:SetColorTexture(0.18, 0.18, 0.18, 0.9)
+    local exportIcon = exportBtn:CreateTexture(nil, "ARTWORK")
+    exportIcon:SetPoint("TOPLEFT", 4, -4)
+    exportIcon:SetPoint("BOTTOMRIGHT", -4, 4)
+    exportIcon:SetAtlas("communities-icon-sharelink")
+    local exportHl = exportBtn:CreateTexture(nil, "HIGHLIGHT")
+    exportHl:SetPoint("TOPLEFT", 2, -2)
+    exportHl:SetPoint("BOTTOMRIGHT", -2, 2)
+    exportHl:SetColorTexture(1, 1, 1, 0.1)
+    exportBtn:SetScript("OnClick", function() exportLockedList() end)
+    exportBtn:SetScript("OnEnter", function(self)
+        anchorTooltip(self)
+        GameTooltip:SetText("Export Locked List")
+        GameTooltip:AddLine("Copy a shareable string of your locked items", 0.7, 0.7, 0.7, true)
+        GameTooltip:Show()
+    end)
+    exportBtn:SetScript("OnLeave", GameTooltip_Hide)
+
     -- List area
     local listArea = CreateFrame("Frame", nil, panel)
     listArea:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -LOCKED_HEADER_HEIGHT)
     listArea:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -8, -LOCKED_HEADER_HEIGHT)
     listArea:SetHeight(MAX_LOCKED_ROWS * 22)
+    listArea:EnableMouseWheel(true)
+    listArea:SetScript("OnMouseWheel", function(_, delta)
+        if IsShiftKeyDown() then
+            local totalItems = 0
+            for _ in pairs(DisenqueueDB.protectedItemIDs) do totalItems = totalItems + 1 end
+            local maxScroll = math.max(0, totalItems - MAX_LOCKED_ROWS)
+            lockedScrollOffset = lockedScrollOffset - delta
+            lockedScrollOffset = math.max(0, math.min(lockedScrollOffset, maxScroll))
+            _G.WDQ_RefreshLockedList()
+        end
+    end)
 
     -- Empty text
     local emptyText = panel:CreateFontString("WDQ_LockedEmpty", "OVERLAY", "GameFontDisable")
@@ -1853,7 +1931,7 @@ local function createLockedPanel()
         row:SetScript("OnEnter", function(self)
             self.unlockLabel:SetAlpha(1)
             if self.itemID then
-                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                anchorTooltip(self)
                 GameTooltip:SetItemByID(self.itemID)
                 GameTooltip:AddLine(" ")
                 local entry = DisenqueueDB.protectedItemIDs[self.itemID]
@@ -1936,12 +2014,17 @@ function _G.WDQ_RefreshLockedList()
         emptyText:SetShown(#items == 0)
     end
 
+    -- Clamp scroll offset
+    local maxScroll = math.max(0, #items - MAX_LOCKED_ROWS)
+    if lockedScrollOffset > maxScroll then lockedScrollOffset = maxScroll end
+
     for i = 1, MAX_LOCKED_ROWS do
         local row = lockedRows[i]
         if not row then break end
 
-        if i <= #items then
-            local entry = items[i]
+        local dataIndex = i + lockedScrollOffset
+        if dataIndex <= #items then
+            local entry = items[dataIndex]
             row.itemID = entry.itemID
             local icon = GetItemIcon(entry.itemID)
             row.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
@@ -1967,6 +2050,226 @@ function _G.WDQ_RefreshLockedList()
             row:Hide()
         end
     end
+end
+
+-- Import/Export dialog (reusable modal for encoded strings)
+local importExportDialog
+
+local function createImportExportDialog()
+    if importExportDialog then return importExportDialog end
+
+    local frame = CreateFrame("Frame", "WDQ_ImportExportDialog", UIParent, "BackdropTemplate")
+    frame:SetSize(450, 300)
+    frame:SetPoint("CENTER")
+    frame:SetFrameStrata("DIALOG")
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", frame.StartMoving)
+    frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+    frame:SetBackdrop({
+        bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 16,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 },
+    })
+    frame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+
+    -- Header bar
+    local headerBar = CreateFrame("Frame", nil, frame)
+    headerBar:SetPoint("TOPLEFT", 4, -4)
+    headerBar:SetPoint("TOPRIGHT", -4, -4)
+    headerBar:SetHeight(28)
+    local headerBg = headerBar:CreateTexture(nil, "BACKGROUND")
+    headerBg:SetAllPoints()
+    headerBg:SetColorTexture(0.08, 0.08, 0.08, 0.9)
+
+    local titleText = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    titleText:SetPoint("LEFT", 10, 0)
+    titleText:SetText("|cffccccccExport|r")
+    frame.titleText = titleText
+
+    -- Close button
+    local closeBtn = CreateFrame("Button", nil, headerBar)
+    closeBtn:SetSize(24, 24)
+    closeBtn:SetPoint("RIGHT", headerBar, "RIGHT", -4, 0)
+    local closeBg = closeBtn:CreateTexture(nil, "BACKGROUND")
+    closeBg:SetPoint("TOPLEFT", 2, -2)
+    closeBg:SetPoint("BOTTOMRIGHT", -2, 2)
+    closeBg:SetColorTexture(0.18, 0.18, 0.18, 0.9)
+    local closeIcon = closeBtn:CreateTexture(nil, "ARTWORK")
+    closeIcon:SetPoint("TOPLEFT", 4, -4)
+    closeIcon:SetPoint("BOTTOMRIGHT", -4, 4)
+    closeIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\close")
+    local closeHl = closeBtn:CreateTexture(nil, "HIGHLIGHT")
+    closeHl:SetPoint("TOPLEFT", 2, -2)
+    closeHl:SetPoint("BOTTOMRIGHT", -2, 2)
+    closeHl:SetColorTexture(1, 1, 1, 0.1)
+    closeBtn:SetScript("OnClick", function() frame:Hide() end)
+
+    -- ScrollFrame + EditBox
+    local scrollFrame = CreateFrame("ScrollFrame", "WDQ_ImportExportScroll", frame, "UIPanelScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", 10, -38)
+    scrollFrame:SetPoint("BOTTOMRIGHT", -30, 40)
+
+    local editBox = CreateFrame("EditBox", "WDQ_ImportExportEditBox", scrollFrame)
+    editBox:SetMultiLine(true)
+    editBox:SetAutoFocus(false)
+    editBox:SetFontObject(ChatFontNormal)
+    editBox:SetWidth(scrollFrame:GetWidth() - 10)
+    editBox:SetScript("OnEscapePressed", function() frame:Hide() end)
+    scrollFrame:SetScrollChild(editBox)
+    frame.editBox = editBox
+    frame.scrollFrame = scrollFrame
+
+    -- Bottom bar with action button
+    local actionBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    actionBtn:SetSize(100, 24)
+    actionBtn:SetPoint("BOTTOM", 0, 10)
+    actionBtn:SetText("Close")
+    actionBtn:SetScript("OnClick", function() frame:Hide() end)
+    frame.actionBtn = actionBtn
+
+    -- Status text (for import feedback)
+    local statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusText:SetPoint("BOTTOM", actionBtn, "TOP", 0, 4)
+    statusText:SetText("")
+    frame.statusText = statusText
+
+    frame:Hide()
+    frame:SetScript("OnShow", function() end)
+    frame:SetScript("OnHide", function()
+        frame.editBox:SetScript("OnTextChanged", nil)
+        frame.editBox:SetText("")
+        frame.statusText:SetText("")
+    end)
+
+    importExportDialog = frame
+    return frame
+end
+
+local function showExportDialog(exportStr)
+    local dialog = createImportExportDialog()
+    dialog.titleText:SetText("|cff60ff60Export Locked List|r")
+    dialog.actionBtn:SetText("Close")
+    dialog.actionBtn:SetScript("OnClick", function() dialog:Hide() end)
+    dialog.statusText:SetText("|cffaaaaaa(Ctrl+A then Ctrl+C to copy)|r")
+    dialog.editBox:SetText(exportStr)
+    dialog.editBox:HighlightText()
+    dialog.editBox:SetFocus()
+    dialog.editBox:SetScript("OnTextChanged", function(self)
+        self:SetText(exportStr)
+        self:HighlightText()
+    end)
+    dialog.editBox:SetScript("OnMouseUp", function(self)
+        self:HighlightText()
+    end)
+    dialog:Show()
+end
+
+showImportDialog = function(callback)
+    local dialog = createImportExportDialog()
+    dialog.titleText:SetText("|cffffffccImport Locked List|r")
+    dialog.actionBtn:SetText("Import")
+    dialog.statusText:SetText("|cffaaaaaaPaste an exported string below|r")
+    dialog.editBox:SetText("")
+    dialog.editBox:SetFocus()
+
+    local function doImport()
+        local text = dialog.editBox:GetText():match("^%s*(.-)%s*$")
+        if text and #text > 10 then
+            local success, msg = callback(text)
+            if success then
+                dialog.statusText:SetText("|cff60ff60" .. msg .. "|r")
+                C_Timer.After(1.5, function() dialog:Hide() end)
+            else
+                dialog.statusText:SetText("|cffff4444" .. msg .. "|r")
+            end
+        else
+            dialog.statusText:SetText("|cffff4444String too short or empty|r")
+        end
+    end
+
+    dialog.actionBtn:SetScript("OnClick", doImport)
+    dialog.editBox:SetScript("OnTextChanged", nil)
+    dialog:Show()
+end
+
+-- Encode/Decode using C_EncodingUtil (native since 11.0)
+local EXPORT_PREFIX = "!WDQ:1!"
+
+exportLockedList = function()
+    local items = {}
+    for itemID, entry in pairs(DisenqueueDB.protectedItemIDs) do
+        local name = (type(entry) == "table" and entry.name) or tostring(itemID)
+        local isAuto = (type(entry) == "table" and entry.autoProtected) or false
+        table.insert(items, { id = itemID, name = name, auto = isAuto })
+    end
+    if #items == 0 then
+        chat("No locked items to export.", NOTIFY_QUEUE)
+        return
+    end
+    local exportTable = { version = 1, items = items }
+    local ok, serialized = pcall(C_EncodingUtil.SerializeCBOR, exportTable)
+    if not ok then
+        chat("Export failed: serialization error.", NOTIFY_WARNINGS)
+        return
+    end
+    local compressed = C_EncodingUtil.CompressString(serialized, Enum.CompressionMethod.Deflate, Enum.CompressionLevel.OptimizeForSize)
+    local encoded = C_EncodingUtil.EncodeBase64(compressed)
+    local exportStr = EXPORT_PREFIX .. encoded
+    showExportDialog(exportStr)
+end
+
+importLockedList = function(inputStr)
+    -- Validate prefix
+    local version, payload = inputStr:match("^!WDQ:(%d+)!(.+)$")
+    if not version or not payload then
+        return false, "Invalid format (missing !WDQ: prefix)"
+    end
+    version = tonumber(version)
+    if version ~= 1 then
+        return false, "Unsupported version: " .. tostring(version)
+    end
+    -- Decode
+    local decoded = C_EncodingUtil.DecodeBase64(payload)
+    if not decoded or decoded == "" then
+        return false, "Failed to decode Base64 data"
+    end
+    -- Decompress
+    local ok, decompressed = pcall(C_EncodingUtil.DecompressString, decoded, Enum.CompressionMethod.Deflate)
+    if not ok or not decompressed then
+        return false, "Failed to decompress data"
+    end
+    -- Deserialize
+    local ok2, data = pcall(C_EncodingUtil.DeserializeCBOR, decompressed)
+    if not ok2 or type(data) ~= "table" then
+        return false, "Failed to deserialize data"
+    end
+    -- Validate structure
+    if type(data.items) ~= "table" then
+        return false, "Invalid data structure (no items)"
+    end
+    -- Merge into locked list
+    local added = 0
+    for _, item in ipairs(data.items) do
+        if type(item.id) == "number" and type(item.name) == "string" then
+            local entry = { name = item.name }
+            if item.auto then
+                entry.autoProtected = true
+            end
+            if not DisenqueueDB.protectedItemIDs[item.id] then
+                added = added + 1
+            end
+            DisenqueueDB.protectedItemIDs[item.id] = entry
+        end
+    end
+    lockedScrollOffset = 0
+    _G.WDQ_RefreshLockedList()
+    local total = #data.items
+    return true, ("Imported %d item(s) (%d new)"):format(total, added)
 end
 
 -- Settings panel (AddOns tab in Blizzard Options)

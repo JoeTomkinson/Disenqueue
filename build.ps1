@@ -65,6 +65,7 @@ New-Item -ItemType Directory -Path $addonDir -Force | Out-Null
 # Copy addon files
 Copy-Item (Join-Path $root "Disenqueue.toc") -Destination $addonDir
 Copy-Item (Join-Path $root "Disenqueue.lua") -Destination $addonDir
+Copy-Item (Join-Path $root "Bindings.xml") -Destination $addonDir
 
 # Copy asset directories
 Copy-Item (Join-Path $root "icons") -Destination $addonDir -Recurse

@@ -387,3 +387,4 @@ ag:Stop()
 - **Townlong Yak (live FrameXML):** https://www.townlong-yak.com/framexml/live
 - **Addon Categories (11.1+):** https://warcraft.wiki.gg/wiki/Addon_Categories
 - **WoW Dev Discord:** https://discord.gg/wowuidev
+- **Live AddOns Source:** https://github.com/Gethe/wow-ui-source/tree/live/Interface/AddOns
