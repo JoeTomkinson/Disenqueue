@@ -2,7 +2,7 @@
 
 A lightweight World of Warcraft addon that builds a disenchant queue from your bags and processes exactly one queued item per hardware input (button press / wheel bind), which keeps usage within Blizzard's one-action-per-input rules.
 
-Also supports the **Lesser Professions**™ — Prospecting and Milling — for those of us who recognise that Enchanting is the one true craft and everything else is just breaking rocks and grinding weeds.
+Also supports the **Lesser Professions**™ - Prospecting and Milling - for those of us who recognise that Enchanting is the one true craft and everything else is just breaking rocks and grinding weeds.
 
 <img width="1024" height="1024" alt="Disenqueue" src="https://github.com/user-attachments/assets/dbcaf466-e64d-4364-9ad5-a6140991d7bc" />
 
