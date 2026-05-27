@@ -1,4 +1,4 @@
-## Interface: 120005
+## Interface: 120007
 ## Title: Disenqueue
 ## Notes: Queue disenchantable bag items and process one per wheel/input action. Also supports the lesser professions (Prospecting & Milling).
 ## Author: Joe Tomkinson (Grimmvöcare - Bronzebeard)
