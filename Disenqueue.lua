@@ -1123,6 +1123,16 @@ SlashCmdList.DISENQUEUE = function(input)
     chat("Unknown command. Use /wdq help")
 end
 
+-- Helper: brighten an icon 20% toward white on hover, restore on leave
+local function applyIconHoverTint(btn, icon, r, g, b)
+    btn:HookScript("OnEnter", function()
+        icon:SetVertexColor(r + (1 - r) * 0.2, g + (1 - g) * 0.2, b + (1 - b) * 0.2, 1)
+    end)
+    btn:HookScript("OnLeave", function()
+        icon:SetVertexColor(r, g, b, 1)
+    end)
+end
+
 local function createUI()
     local frame = CreateFrame("Frame", "WDQ_QueueFrame", UIParent, "BackdropTemplate")
     frame:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
@@ -1264,6 +1274,11 @@ local function createUI()
     end)
     settingsBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
+    -- Apply hover brightening to header buttons
+    applyIconHoverTint(closeBtn, closeBtn.icon, 0.9, 0.4, 0.4)
+    applyIconHoverTint(lockBtn, lockBtn.icon, 1.0, 0.82, 0.3)
+    applyIconHoverTint(settingsBtn, settingsBtn.icon, 0.7, 0.72, 0.75)
+
     -- Status text (subtitle row in header)
     local status = headerBar:CreateFontString("WDQ_StatusText", "OVERLAY", "GameFontNormalSmall")
     status:SetPoint("BOTTOMLEFT", headerBar, "BOTTOMLEFT", 10, 6)
@@ -1351,6 +1366,7 @@ local function createUI()
             GameTooltip:Show()
         end)
         lockRowBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        applyIconHoverTint(lockRowBtn, lockRowIcon, 1.0, 0.82, 0.3)
         row.lockBtn = lockRowBtn
 
         -- Separator between row action buttons
@@ -1392,6 +1408,7 @@ local function createUI()
             GameTooltip:Show()
         end)
         removeRowBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        applyIconHoverTint(removeRowBtn, removeRowIcon, 0.85, 0.45, 0.45)
         row.removeBtn = removeRowBtn
 
         -- Row tooltip on hover
@@ -1862,6 +1879,11 @@ local function createLockedPanel()
     end)
     exportBtn:SetScript("OnLeave", GameTooltip_Hide)
 
+    -- Apply hover brightening to locked panel header buttons
+    applyIconHoverTint(closeBtn, closeIcon, 0.9, 0.4, 0.4)
+    applyIconHoverTint(importBtn, importIcon, 0.4, 0.85, 0.55)
+    applyIconHoverTint(exportBtn, exportIcon, 0.4, 0.8, 0.9)
+
     -- List area
     local listArea = CreateFrame("Frame", nil, panel)
     listArea:SetPoint("TOPLEFT", panel, "TOPLEFT", 8, -LOCKED_HEADER_HEIGHT)
@@ -2110,6 +2132,8 @@ local function createImportExportDialog()
     closeIcon:SetPoint("TOPLEFT", 4, -4)
     closeIcon:SetPoint("BOTTOMRIGHT", -4, 4)
     closeIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\close-square")
+    closeIcon:SetVertexColor(0.9, 0.4, 0.4, 1)
+    applyIconHoverTint(closeBtn, closeIcon, 0.9, 0.4, 0.4)
     closeBtn:SetScript("OnClick", function() frame:Hide() end)
 
     -- ScrollFrame + EditBox
@@ -2148,6 +2172,16 @@ local function createImportExportDialog()
     clipBtn.text = clipText
     frame.clipBtn = clipBtn
 
+    -- Hover brightening for clipBtn (reads dynamic base colour)
+    clipBtn:HookScript("OnEnter", function(self)
+        local r, g, b = self.baseR or 1, self.baseG or 1, self.baseB or 1
+        self.icon:SetVertexColor(r + (1 - r) * 0.2, g + (1 - g) * 0.2, b + (1 - b) * 0.2, 1)
+    end)
+    clipBtn:HookScript("OnLeave", function(self)
+        local r, g, b = self.baseR or 1, self.baseG or 1, self.baseB or 1
+        self.icon:SetVertexColor(r, g, b, 1)
+    end)
+
     -- Status text (for feedback, above the button)
     local statusText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     statusText:SetPoint("BOTTOMLEFT", clipBtn, "TOPLEFT", 0, 4)
@@ -2183,6 +2217,7 @@ local function showExportDialog(exportStr)
     -- Configure clipboard button for copy
     dialog.clipBtn.icon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\export")
     dialog.clipBtn.icon:SetVertexColor(0.4, 0.8, 0.9, 1)
+    dialog.clipBtn.baseR, dialog.clipBtn.baseG, dialog.clipBtn.baseB = 0.4, 0.8, 0.9
     dialog.clipBtn.text:SetText("|cffccccccCopy to Clipboard|r")
     dialog.clipBtn:SetScript("OnClick", function()
         dialog.editBox:SetText(exportStr)
@@ -2218,6 +2253,7 @@ showImportDialog = function(callback)
     -- Configure clipboard button: starts as "Paste from Clipboard", switches to "Import" once text is present
     dialog.clipBtn.icon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\import")
     dialog.clipBtn.icon:SetVertexColor(0.4, 0.85, 0.55, 1)
+    dialog.clipBtn.baseR, dialog.clipBtn.baseG, dialog.clipBtn.baseB = 0.4, 0.85, 0.55
     dialog.clipBtn.text:SetText("|cffccccccPaste from Clipboard|r")
     dialog.clipBtn:SetScript("OnClick", function()
         dialog.editBox:SetFocus()
@@ -2229,11 +2265,13 @@ showImportDialog = function(callback)
         if text and #text > 10 then
             dialog.clipBtn.icon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\import-export")
             dialog.clipBtn.icon:SetVertexColor(0.5, 1.0, 0.5, 1)
+            dialog.clipBtn.baseR, dialog.clipBtn.baseG, dialog.clipBtn.baseB = 0.5, 1.0, 0.5
             dialog.clipBtn.text:SetText("|cffccccccImport|r")
             dialog.clipBtn:SetScript("OnClick", doImport)
         else
             dialog.clipBtn.icon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\import")
             dialog.clipBtn.icon:SetVertexColor(0.4, 0.85, 0.55, 1)
+            dialog.clipBtn.baseR, dialog.clipBtn.baseG, dialog.clipBtn.baseB = 0.4, 0.85, 0.55
             dialog.clipBtn.text:SetText("|cffccccccPaste from Clipboard|r")
             dialog.clipBtn:SetScript("OnClick", function()
                 dialog.editBox:SetFocus()
