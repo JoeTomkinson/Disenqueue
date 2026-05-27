@@ -3,6 +3,8 @@
 > **Interface Version:** `120005` (Patch 12.0.0 — Midnight)
 > **Last Updated:** May 2026
 
+This document is mainly so I can keep track of relevant resources and things I've stumbled upon along the way, relevant to this add-on.
+
 ---
 
 ## Interface Version History & Release Notes
