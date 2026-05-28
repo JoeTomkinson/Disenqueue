@@ -788,7 +788,7 @@ function ns.ExportLockedList()
     end
     local compressed = C_EncodingUtil.CompressString(serialized, Enum.CompressionMethod.Deflate, Enum.CompressionLevel.OptimizeForSize)
     local encoded = C_EncodingUtil.EncodeBase64(compressed)
-    return EXPORT_PREFIX .. encoded
+    return EXPORT_PREFIX .. encoded, #items
 end
 
 function ns.ImportLockedList(inputStr)

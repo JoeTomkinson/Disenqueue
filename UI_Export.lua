@@ -259,7 +259,7 @@ end
 
 -- ─── Show Export ─────────────────────────────────────────────────────────────
 
-local function showExport(content)
+local function showExport(content, itemCount)
     if not modal then createExportModal() end
 
     isImportMode = false
@@ -273,11 +273,8 @@ local function showExport(content)
     modal._codeBlock:SetCursorPosition(0)
     modal._codeBlock:EnableKeyboard(true)
 
-    -- Count items (count semicolons + 1 roughly)
-    local count = 0
-    for _ in string.gmatch(currentContent, "[^;]+") do count = count + 1 end
-    if count > 0 then
-        modal._countHint:SetText(count .. " items")
+    if itemCount and itemCount > 0 then
+        modal._countHint:SetText(itemCount .. " items")
     else
         modal._countHint:SetText("")
     end
@@ -349,8 +346,8 @@ ns.RegisterCallback("ADDON_LOADED", function()
     -- Pre-create modal on load (lazy pattern still works, but faster open)
 end)
 
-ns.RegisterCallback("SHOW_EXPORT", function(content)
-    showExport(content)
+ns.RegisterCallback("SHOW_EXPORT", function(content, itemCount)
+    showExport(content, itemCount)
 end)
 
 ns.RegisterCallback("SHOW_IMPORT", function()

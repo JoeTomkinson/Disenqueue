@@ -256,8 +256,10 @@ local function refreshList()
         if est > 0 then
             mainFrame._dustEst:SetText("~ " .. ns.FormatGold(est) .. " dust est.")
             mainFrame._dustEst:Show()
+            mainFrame._dustIcon:Show()
         else
             mainFrame._dustEst:Hide()
+            mainFrame._dustIcon:Hide()
         end
     end
 
@@ -517,13 +519,21 @@ local function createMainFrame()
     lockedChip:SetPoint("LEFT", queuedChip, "RIGHT", 8, 0)
     frame._lockedChip = lockedChip
 
-    -- Dust estimate (right-aligned)
+    -- Dust estimate (right-aligned) with shard icon
     local dustEst = metaStrip:CreateFontString(nil, "OVERLAY")
     dustEst:SetFontObject(ns.Font.Mono)
-    dustEst:SetPoint("RIGHT", metaStrip, "RIGHT", -14, 0)
+    dustEst:SetPoint("RIGHT", metaStrip, "RIGHT", -32, 0)
     dustEst:SetTextColor(C.textDim.r, C.textDim.g, C.textDim.b)
     dustEst:Hide()
     frame._dustEst = dustEst
+
+    local dustIcon = metaStrip:CreateTexture(nil, "OVERLAY")
+    dustIcon:SetSize(14, 14)
+    dustIcon:SetTexture("Interface\\AddOns\\Disenqueue\\icons\\shard")
+    dustIcon:SetVertexColor(C.violetHi.r, C.violetHi.g, C.violetHi.b)
+    dustIcon:SetPoint("LEFT", dustEst, "RIGHT", 4, 0)
+    dustIcon:Hide()
+    frame._dustIcon = dustIcon
 
     -- Divider below meta strip
     local metaDiv = metaStrip:CreateTexture(nil, "ARTWORK")
@@ -647,7 +657,7 @@ local function createMainFrame()
     footerDiv:SetPoint("TOPRIGHT", -14, 0)
     footerDiv:SetColorTexture(C.divider.r, C.divider.g, C.divider.b, C.divider.a)
 
-    -- Kbd hint row: ctrl + scroll to browse (centered between divider and buttons)
+    -- Kbd hint row: shift + scroll to browse (centered between divider and buttons)
     local hintRow = CreateFrame("Frame", nil, idleFooter)
     hintRow:SetHeight(16)
     hintRow:SetPoint("TOPLEFT", idleFooter, "TOPLEFT", 0, -12)
@@ -655,14 +665,14 @@ local function createMainFrame()
     hintRow:Hide()
     frame._hintRow = hintRow
 
-    local ctrlPill = Theme.CreateKbdPill(hintRow, "ctrl")
-    ctrlPill:SetPoint("RIGHT", hintRow, "CENTER", -30, 0)
+    local shiftPill = Theme.CreateKbdPill(hintRow, "shift")
+    shiftPill:SetPoint("RIGHT", hintRow, "CENTER", -30, 0)
 
     local plusText = hintRow:CreateFontString(nil, "OVERLAY")
     plusText:SetFontObject(ns.Font.Kbd)
     plusText:SetText("+")
     plusText:SetTextColor(C.violetHi.r, C.violetHi.g, C.violetHi.b)
-    plusText:SetPoint("LEFT", ctrlPill, "RIGHT", 4, 0)
+    plusText:SetPoint("LEFT", shiftPill, "RIGHT", 4, 0)
 
     local scrollPill = Theme.CreateKbdPill(hintRow, "scroll")
     scrollPill:SetPoint("LEFT", plusText, "RIGHT", 4, 0)

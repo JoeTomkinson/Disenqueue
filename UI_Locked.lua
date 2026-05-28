@@ -287,9 +287,9 @@ local function createLockedPanel()
         "Interface\\AddOns\\Disenqueue\\icons\\upload", C.violet)
     exportBtn:SetPoint("RIGHT", importBtn, "LEFT", -4, 0)
     exportBtn:SetScript("OnClick", function()
-        local exportStr = ns.ExportLockedList()
+        local exportStr, itemCount = ns.ExportLockedList()
         if exportStr then
-            ns.FireCallback("SHOW_EXPORT", exportStr)
+            ns.FireCallback("SHOW_EXPORT", exportStr, itemCount)
         end
     end)
     exportBtn:SetScript("OnEnter", function(self)
