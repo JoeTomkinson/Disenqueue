@@ -4,8 +4,6 @@ A lightweight disenchant queue that processes **one item per hardware input** �
 
 Also supports the **Lesser Professions**™ — Prospecting and Milling — for those of us who recognise that Enchanting is the one true craft and everything else is just breaking rocks and grinding weeds.
 
-<img width="1024" height="1024" alt="Disenqueue" src="https://github.com/user-attachments/assets/dbcaf466-e64d-4364-9ad5-a6140991d7bc" />
-
 ---
 
 ## Features
@@ -110,7 +108,7 @@ No. Disenqueue processes exactly one item per hardware input event, which is the
 
 ## Compatibility
 
-- **WoW Retail** — The War Within (Interface 120005)
+- **WoW Retail** — The War Within (Interface 120005) and Midnight (Interface 120007) compatible
 - **Dependencies** — None. Fully standalone, no libraries required.
 - **Conflicts** — None known. Works alongside TSM, Enchantrix, and other inventory addons.
 
