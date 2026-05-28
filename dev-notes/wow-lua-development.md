@@ -181,11 +181,13 @@ end)
 ### Why NOT type=spell + target-item?
 
 The wiki documents `type=spell` + `target-item` as an atomic alternative:
+
 ```lua
 btn:SetAttribute("type", "spell")
 btn:SetAttribute("spell", "Disenchant")
 btn:SetAttribute("target-item", "0 1")  -- "bagID slotIndex"
 ```
+
 In practice (retail 12.0+), `target-item` does **not reliably auto-target** the
 bag item. The spell enters targeting mode (cursor glows) but the item click never
 resolves. Use the guarded macro approach instead.

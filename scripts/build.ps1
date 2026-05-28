@@ -14,7 +14,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path $PSScriptRoot -Parent
 $tocFile = Join-Path $root "Disenqueue.toc"
-$luaFile = Join-Path $root "Disenqueue.lua"
+$coreFile = Join-Path $root "Core.lua"
 
 # Interface versions
 $INTERFACE_LIVE = "120005"
@@ -46,10 +46,10 @@ if ($Bump) {
     $tocContent = $tocContent -replace "## Version:\s*$([regex]::Escape($old))", "## Version: $new"
     Set-Content $tocFile $tocContent -NoNewline
 
-    # Update .lua
-    $luaContent = Get-Content $luaFile -Raw
-    $luaContent = $luaContent -replace "local ADDON_VERSION\s*=\s*`"$([regex]::Escape($old))`"", "local ADDON_VERSION = `"$new`""
-    Set-Content $luaFile $luaContent -NoNewline
+    # Update Core.lua version
+    $luaContent = Get-Content $coreFile -Raw
+    $luaContent = $luaContent -replace "ns\.ADDON_VERSION\s*=\s*`"$([regex]::Escape($old))`"", "ns.ADDON_VERSION = `"$new`""
+    Set-Content $coreFile $luaContent -NoNewline
 
     Write-Host "Version bumped: $old -> $new" -ForegroundColor Cyan
 }
@@ -81,12 +81,23 @@ function Build-Variant {
 
     # Copy addon files
     Copy-Item (Join-Path $root "Disenqueue.toc") -Destination $addonDir
-    Copy-Item (Join-Path $root "Disenqueue.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "Core.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "Theme.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "SlotMap.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "UI_Main.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "UI_Locked.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "UI_Export.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "UI_Minimap.lua") -Destination $addonDir
+    Copy-Item (Join-Path $root "Settings.lua") -Destination $addonDir
     Copy-Item (Join-Path $root "Bindings.xml") -Destination $addonDir
 
     # Copy asset directories
     Copy-Item (Join-Path $root "icons") -Destination $addonDir -Recurse
     Copy-Item (Join-Path $root "logos") -Destination $addonDir -Recurse
+    $fontsDir = Join-Path $root "Fonts"
+    if (Test-Path $fontsDir) {
+        Copy-Item $fontsDir -Destination $addonDir -Recurse
+    }
 
     # Remove source art files that aren't needed in the addon
     $exclude = @("*.png", "*.svg", "*.psd")

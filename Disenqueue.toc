@@ -2,8 +2,15 @@
 ## Title: Disenqueue
 ## Notes: Queue disenchantable bag items and process one per wheel/input action. Also supports the lesser professions (Prospecting & Milling).
 ## Author: Joe Tomkinson (Grimmvöcare - Bronzebeard)
-## Version: 1.0.3
+## Version: 1.1.0
 ## SavedVariables: DisenqueueDB
 ## IconTexture: Interface\AddOns\Disenqueue\logos\logo
 
-Disenqueue.lua
+Core.lua
+Theme.lua
+SlotMap.lua
+UI_Main.lua
+UI_Locked.lua
+UI_Export.lua
+UI_Minimap.lua
+Settings.lua
