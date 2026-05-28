@@ -1,0 +1,6 @@
+The fonts in this directory are distributed under the SIL Open Font License, Version 1.1.
+
+Inter (v4.1) - Copyright 2020 The Inter Project Authors (https://github.com/rsms/inter)
+JetBrains Mono (v2.304) - Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+Full license text: https://scripts.sil.org/OFL
